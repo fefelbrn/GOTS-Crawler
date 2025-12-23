@@ -1,6 +1,9 @@
+# Crawler
 selenium>=4.15.0
-pandas>=2.0.0
-openpyxl>=3.1.0
-pdfplumber>=0.10.0
 webdriver-manager>=4.0.0
 
+# API Server
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+python-multipart==0.0.20
