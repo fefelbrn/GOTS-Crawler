@@ -2,8 +2,5 @@
 selenium>=4.15.0
 webdriver-manager>=4.0.0
 
-# API Server
-fastapi==0.115.5
-uvicorn[standard]==0.32.1
-pydantic==2.10.3
-python-multipart==0.0.20
+# MCP Server (priorité)
+fastmcp>=0.1.0

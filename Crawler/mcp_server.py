@@ -1,16 +1,14 @@
 """
-MCP Server pour le GOTS Crawler
-Expose le crawler via HTTP pour Dust
+GOTS Certification Crawler - MCP Server
+Utilise fastmcp pour compatibilité native avec Dust
 """
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-import uvicorn
-import logging
+from fastmcp import FastMCP
 from gots_crawler import GOTSCrawler
+from typing import Optional
 import json
+import logging
+import os
 
 # Configuration du logging
 logging.basicConfig(
@@ -19,194 +17,97 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="GOTS Certification MCP Server",
-    description="Serveur MCP pour vérifier les certifications GOTS",
+# Initialiser le serveur MCP avec fastmcp
+mcp = FastMCP(
+    name="GOTS Certification Crawler",
     version="1.0.0"
 )
 
-# CORS pour permettre les requêtes depuis Dust
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-# Modèles Pydantic
-class CertificationRequest(BaseModel):
-    certification_number: str
+@mcp.tool()
+def search_gots_certification(
+    certification_number: str,
     headless: Optional[bool] = True
-
-class CertificationResponse(BaseModel):
-    found: bool
-    certification_number: str
-    company_name: Optional[str] = None
-    country: Optional[str] = None
-    field_of_operation: Optional[str] = None
-    product_category: Optional[str] = None
-    cb_client_number: Optional[str] = None
-    certification_body: Optional[str] = None
-    certificate_expiry_date: Optional[str] = None
-    address: Optional[str] = None
-    product_details: Optional[str] = None
-    error: Optional[str] = None
-
-class HealthResponse(BaseModel):
-    status: str
-    message: str
-
-
-# Endpoints
-
-@app.get("/", response_model=Dict[str, str])
-async def root():
-    """Endpoint racine"""
-    return {
-        "service": "GOTS Certification MCP Server",
-        "status": "running",
-        "version": "1.0.0",
-        "endpoints": {
-            "health": "/health",
-            "search": "/search_certification",
-            "mcp_tools": "/mcp/tools"
-        }
-    }
-
-
-@app.get("/health", response_model=HealthResponse)
-async def health_check():
-    """Health check endpoint"""
-    return HealthResponse(
-        status="healthy",
-        message="GOTS Crawler MCP Server is running"
-    )
-
-
-@app.post("/search_certification", response_model=CertificationResponse)
-async def search_certification(request: CertificationRequest):
+) -> str:
     """
-    Recherche une certification GOTS
+    Recherche et vérifie une certification GOTS (Global Organic Textile Standard) sur le site officiel.
+    
+    Retourne les détails complets de la certification incluant :
+    - Nom de l'entreprise
+    - Pays
+    - Domaine d'opération
+    - Catégorie de produit
+    - Numéro client CB
+    - Organisme de certification
+    - Date d'expiration du certificat
+    - Adresse
+    - Détails des produits
     
     Args:
-        request: Objet contenant le numéro de certification
-        
+        certification_number: Le numéro de certification GOTS à rechercher (ex: '21205', 'GOTS-21205')
+        headless: Si True, le navigateur s'exécute en mode headless (invisible). Par défaut: True
+    
     Returns:
-        Résultats de la recherche
+        JSON string contenant les détails de la certification ou un message d'erreur si non trouvée
     """
-    logger.info(f"🔍 Requête reçue pour certification: {request.certification_number}")
+    logger.info(f"🔍 Recherche de la certification: {certification_number}")
     
     crawler = None
     try:
-        # Initialiser le crawler
-        crawler = GOTSCrawler(headless=request.headless)
+        # Initialiser le crawler Selenium
+        crawler = GOTSCrawler(headless=headless)
         
         # Effectuer la recherche
-        result = crawler.search_certification(request.certification_number)
+        result = crawler.search_certification(certification_number)
         
-        logger.info(f"✅ Recherche terminée - Found: {result.get('found', False)}")
+        # Logger le résultat
+        if result.get('found', False):
+            logger.info(f"✅ Certification trouvée: {result.get('company_name', 'N/A')}")
+        else:
+            logger.info(f"❌ Certification non trouvée: {certification_number}")
         
-        return CertificationResponse(**result)
+        # Retourner le résultat en JSON formaté
+        return json.dumps(result, indent=2, ensure_ascii=False)
         
     except Exception as e:
         logger.error(f"❌ Erreur lors de la recherche: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur lors de la recherche: {str(e)}"
-        )
-    finally:
-        if crawler:
-            crawler.close()
-
-
-@app.get("/mcp/tools")
-async def get_mcp_tools():
-    """
-    Retourne la liste des tools disponibles au format MCP
-    Compatible avec Dust MCP
-    """
-    return {
-        "tools": [
-            {
-                "name": "search_gots_certification",
-                "description": "Recherche et vérifie une certification GOTS (Global Organic Textile Standard) sur le site officiel. Retourne les détails de la certification si trouvée.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "certification_number": {
-                            "type": "string",
-                            "description": "Le numéro de certification GOTS à rechercher (ex: '21205', 'GOTS-21205')"
-                        },
-                        "headless": {
-                            "type": "boolean",
-                            "description": "Si true, le navigateur s'exécute en mode headless (sans interface graphique). Par défaut: true",
-                            "default": True
-                        }
-                    },
-                    "required": ["certification_number"]
-                }
-            }
-        ]
-    }
-
-
-@app.post("/mcp/tools/search_gots_certification")
-async def mcp_search_gots_certification(request: Dict[str, Any]):
-    """
-    Endpoint MCP pour rechercher une certification GOTS
-    Format compatible avec Dust MCP
-    """
-    logger.info(f"🔍 MCP Tool appelé avec: {request}")
-    
-    try:
-        # Extraire les paramètres
-        cert_number = request.get("certification_number")
-        headless = request.get("headless", True)
         
-        if not cert_number:
-            raise HTTPException(
-                status_code=400,
-                detail="Le paramètre 'certification_number' est requis"
-            )
-        
-        # Créer une requête standard
-        cert_request = CertificationRequest(
-            certification_number=cert_number,
-            headless=headless
-        )
-        
-        # Appeler la fonction de recherche
-        result = await search_certification(cert_request)
-        
-        # Retourner au format MCP
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps(result.dict(), indent=2, ensure_ascii=False)
-                }
-            ]
+        # Retourner une erreur en JSON
+        error_result = {
+            "found": False,
+            "certification_number": certification_number,
+            "error": str(e)
         }
+        return json.dumps(error_result, indent=2, ensure_ascii=False)
         
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        logger.error(f"❌ Erreur MCP: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erreur MCP: {str(e)}"
-        )
+    finally:
+        # Toujours fermer le crawler pour libérer les ressources
+        if crawler:
+            try:
+                crawler.close()
+                logger.info("🔒 Crawler fermé")
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur lors de la fermeture du crawler: {e}")
 
 
 if __name__ == "__main__":
-    logger.info("🚀 Démarrage du serveur MCP GOTS Crawler...")
-    logger.info("📍 Serveur disponible sur: http://localhost:8000")
-    logger.info("📖 Documentation API: http://localhost:8000/docs")
+    # Configuration depuis variables d'environnement
+    PORT = int(os.getenv("PORT", "8000"))
+    HOST = os.getenv("HOST", "0.0.0.0")
     
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+    logger.info("=" * 70)
+    logger.info("🚀 Démarrage du serveur MCP GOTS Crawler")
+    logger.info("=" * 70)
+    logger.info(f"📍 Host: {HOST}")
+    logger.info(f"📍 Port: {PORT}")
+    logger.info(f"🌐 URL locale: http://localhost:{PORT}")
+    logger.info("=" * 70)
+    logger.info("")
+    logger.info("💡 Pour exposer via ngrok: ngrok http 8000")
+    logger.info("💡 Dans Dust, utilise l'URL ngrok directement (sans /sse)")
+    logger.info("")
+    logger.info("🛑 Appuie sur Ctrl+C pour arrêter")
+    logger.info("=" * 70)
+    
+    # Lancer le serveur avec transport HTTP
+    mcp.run(transport="http", host=HOST, port=PORT)
