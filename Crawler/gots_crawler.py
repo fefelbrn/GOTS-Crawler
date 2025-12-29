@@ -21,6 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Réduire les logs externes
+logging.getLogger('WDM').setLevel(logging.WARNING)
+logging.getLogger('selenium').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+
 
 class GOTSCrawler:
     """Crawler pour vérifier les certifications GOTS"""
@@ -199,8 +204,11 @@ class GOTSCrawler:
                     if len(details_links) == 1:
                         target_link = details_links[0]
                         exact_match_found = True
-                        logger.info("✅ Un seul résultat")
-                    else:
+                        logger.info("✅ Un seul résultat, sélection automatique")
+                    
+                    elif len(details_links) > 1:
+                        logger.info(f"⚠️  Plusieurs résultats ({len(details_links)}), tentative de match exact dans le tableau...")
+                        
                         try:
                             results_table = self.driver.find_element(By.TAG_NAME, "table")
                             rows = results_table.find_elements(By.TAG_NAME, "tr")
@@ -209,6 +217,7 @@ class GOTSCrawler:
                                 try:
                                     row_text = row.text
                                     cert_pattern = rf'\b{re.escape(certification_number)}\b'
+                                    
                                     if (re.search(cert_pattern, row_text) or 
                                         f"GOTS-{certification_number}" in row_text or
                                         f"GOTS {certification_number}" in row_text):
@@ -216,7 +225,7 @@ class GOTSCrawler:
                                             link_in_row = row.find_element(By.XPATH, ".//a[contains(@class, 'uk-button') or contains(text(), 'details')]")
                                             target_link = link_in_row
                                             exact_match_found = True
-                                            logger.info(f"✅ Match ligne {i+1}")
+                                            logger.info(f"✅ Match exact trouvé dans la ligne {i}")
                                             break
                                         except:
                                             continue
@@ -225,35 +234,59 @@ class GOTSCrawler:
                         except:
                             pass
                         
+                        # SI AUCUN MATCH DANS LE TABLEAU : PRENDRE LE PREMIER RÉSULTAT
                         if not exact_match_found:
-                            logger.warning(f"⚠️  Aucun match exact")
-                            return {"found": False, "certification_number": certification_number}
+                            logger.warning(f"⚠️  Aucun match exact dans le tableau (normal, le numéro n'y est pas affiché)")
+                            logger.info(f"📌 Sélection du PREMIER résultat par défaut")
+                            target_link = details_links[0]
+                            exact_match_found = True  # On considère qu'on a un candidat valide
                     
-                    if not target_link and exact_match_found:
-                        target_link = details_links[0]
-                    elif not target_link:
+                    # Vérification finale
+                    if not target_link:
+                        logger.error("❌ Impossible de sélectionner un lien")
                         return {"found": False, "certification_number": certification_number}
                     
                     # Clic sur details
                     try:
                         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_link)
-                        time.sleep(0.5)  # Réduit de 1 à 0.5
+                        time.sleep(0.5)
                         
                         try:
                             target_link.click()
-                            logger.info("✅ Clic details")
                         except:
                             self.driver.execute_script("arguments[0].click();", target_link)
-                            logger.info("✅ Clic details (JS)")
                         
-                        time.sleep(3)  # Réduit de 5 à 3
+                        time.sleep(3)
                         
                         # EXTRAIRE DONNÉES
                         details_data = self.extract_details_data()
                         
-                        # Vérifier correspondance
+                        # Vérifier que le numéro de certification correspond bien
                         extracted_cert = details_data.get("certification_number", "")
                         cert_matches = False
+                        
+                        if extracted_cert:
+                            clean_extracted = re.sub(r'[A-Za-z\s-]+', '', extracted_cert)
+                            clean_searched = re.sub(r'[A-Za-z\s-]+', '', certification_number)
+                            
+                            if clean_extracted == clean_searched or certification_number in extracted_cert:
+                                cert_matches = True
+                            else:
+                                # On retourne quand même les données avec un warning
+                                details_data["warning"] = f"Certification trouvée: {extracted_cert}, recherchée: {certification_number}"
+                                cert_matches = True  # On accepte quand même pour investigation
+                        else:
+                            # Pas de numéro extrait de la page, on met celui recherché
+                            logger.warning("⚠️  Numéro de certification non extrait de la page de détails")
+                            details_data["certification_number"] = certification_number
+                            cert_matches = True
+                        
+                        details_data["found"] = True
+                        return details_data
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Erreur lors du clic: {e}")
+                        return {"found": False, "error": str(e), "certification_number": certification_number}
                         
                         if extracted_cert:
                             clean_extracted = re.sub(r'[A-Za-z\s-]+', '', extracted_cert)
@@ -365,9 +398,7 @@ class GOTSCrawler:
                 data["certificate_expiry_date"] = expiry_match.group(1)
             
             # ==================== CONTACT DATA ====================
-            
-            logger.info("📍 Extraction CONTACT DATA...")
-            
+                     
             # Address (rue + numéro)
             address_match = re.search(
                 r'Address[:\s]+([^\n]+?)(?=\s*State|$)', 
@@ -417,9 +448,7 @@ class GOTSCrawler:
                 city_match = re.search(r'City[:\s]+([^\n]+)', page_text_visible, re.IGNORECASE)
                 if city_match:
                     data["city"] = city_match.group(1).strip()
-            
-            logger.info(f"✅ Address: {data['address']}, State: {data['state']}, Postcode: {data['postcode']}, City: {data['city']}")
-            
+                        
             # ==================== PRODUCT DETAILS ====================
             
             logger.info("📦 Extraction product_details...")
@@ -436,10 +465,7 @@ class GOTSCrawler:
                     header_text = ""
                     if rows:
                         header_text = rows[0].text.lower()
-                    
-                    if "product" in header_text or "material" in header_text or "category" in header_text:
-                        logger.info(f"✅ Tableau produits trouvé ({len(rows)} lignes)")
-                        
+                                            
                         for row in rows[1:]:
                             try:
                                 cells = row.find_elements(By.TAG_NAME, "td")
@@ -456,23 +482,17 @@ class GOTSCrawler:
                 logger.warning(f"⚠️ Erreur extraction tableau: {e}")
             
             # Méthode 2: Extraction par regex
-            if not product_details_list:
-                logger.info("🔍 Extraction regex product_details...")
-                
+            if not product_details_list:            
                 product_pattern = r"([A-Za-z\s',]+)\s*\(PC\d+\);?\s*([^;]+)\s*\(PD\d+\);?\s*([^,\n]+(?:Min\.\s*\d+%\s*Max\.\s*\d+%[^,\n]*)+)"
-                
                 matches = re.findall(product_pattern, page_text_visible, re.IGNORECASE)
                 
                 for match in matches:
                     product_line = "; ".join([m.strip() for m in match if m.strip()])
                     product_details_list.append(product_line)
                 
-                if matches:
-                    logger.info(f"✅ {len(matches)} produits extraits via regex")
             
             # Méthode 3: Extraction section Product Details
             if not product_details_list:
-                logger.info("🔍 Extraction section Product Details...")
                 
                 product_section_match = re.search(
                     r'Product Details[:\s]*(.*?)(?:Address|Certificate|CONTACT DATA|$)',
@@ -491,8 +511,6 @@ class GOTSCrawler:
                             ('PC' in line or 'PD' in line or 'Min.' in line or '%' in line)):
                             product_details_list.append(line)
                     
-                    if product_details_list:
-                        logger.info(f"✅ {len(product_details_list)} produits extraits de la section")
             
             # Assembler product_details
             if product_details_list:
@@ -508,12 +526,7 @@ class GOTSCrawler:
                         seen.add(product)
                 
                 data["product_details"] = ", ".join(cleaned_products)
-                logger.info(f"✅ {len(cleaned_products)} produits finaux")
-            else:
-                logger.warning("⚠️ Aucun product_details extrait")
-                data["product_details"] = ""
             
-            logger.info(f"✅ Données extraites: {data['company_name']}")
             return data
             
         except Exception as e:
