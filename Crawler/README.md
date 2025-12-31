@@ -1,102 +1,122 @@
-# GOTS Certification Crawler
+# 🌿 GOTS Certification Crawler
 
-Crawler Python pour vérifier automatiquement les certifications GOTS (Global Organic Textile Standard) des suppliers textiles.
+Service de vérification automatique des certifications GOTS (Global Organic Textile Standard) via Selenium et serveur MCP pour Dust.
 
-## Fonctionnalités
+## 🎯 Fonctionnalités
 
-- Extraction du numéro de certification depuis les PDFs de certification
-- Recherche automatique sur la base de données GOTS
-- Vérification de la validité des certifications
-- Extraction complète des données de certification
-- Génération d'un fichier Excel avec les résultats
+- **Recherche automatique** de certifications sur la base de données officielle GOTS
+- **Extraction complète** des données : entreprise, pays, domaine d'opération, produits, dates d'expiration
+- **Intégration Dust** via serveur MCP (FastMCP)
+- **Mode headless** pour exécution en background
+- **Optimisé** pour des réponses < 30 secondes
 
-## Installation
+## 📦 Installation
 
-1. Installer les dépendances Python :
 ```bash
+# Installer les dépendances
 pip install -r requirements.txt
 ```
 
-2. Installer ChromeDriver :
-   - Télécharger ChromeDriver depuis https://chromedriver.chromium.org/
-   - Ou utiliser `webdriver-manager` (déjà inclus dans requirements.txt)
+**Dépendances principales :**
+- `selenium` : Automatisation du navigateur
+- `webdriver-manager` : Gestion automatique de ChromeDriver
+- `fastmcp` : Serveur MCP pour Dust
 
-## Structure du projet
+## 🚀 Utilisation
+
+### Mode MCP Server (pour Dust)
+
+```bash
+# Démarrer le serveur
+./start_mcp_server.sh
+
+# Ou directement
+python mcp_server.py
+```
+
+Le serveur démarre sur `http://0.0.0.0:8000` et expose la fonction :
+- `search_gots_certification(certification_number, headless=True)`
+
+**Pour exposer publiquement :**
+```bash
+ngrok http 8000
+# Puis utiliser l'URL ngrok dans Dust
+```
+
+### Mode standalone (Python)
+
+```python
+from gots_crawler import GOTSCrawler
+import json
+
+crawler = GOTSCrawler(headless=True)
+
+try:
+    result = crawler.search_certification("21205")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+finally:
+    crawler.close()
+```
+
+## 📊 Structure des données retournées
+
+```json
+{
+  "found": true,
+  "company_name": "Example Company",
+  "certification_number": "21205",
+  "country": "Netherlands",
+  "field_of_operation": "Manufacturing",
+  "product_category": "Textiles",
+  "cb_client_number": "12345",
+  "certification_body": "Control Union",
+  "certificate_expiry_date": "2025-12-31",
+  "address": "Street 123",
+  "state": "North Holland",
+  "postcode": "1033 MZ",
+  "city": "Amsterdam",
+  "product_details": "Cotton (PC0001); Knitted fabric (PD0002)..."
+}
+```
+
+## 🏗️ Architecture
 
 ```
 Crawler/
-├── gots_crawler.py      # Classe principale du crawler
-├── main.py              # Script principal d'exécution
-├── requirements.txt     # Dépendances Python
-└── README.md           # Ce fichier
+├── gots_crawler.py         # Classe principale Selenium
+├── mcp_server.py          # Serveur MCP pour Dust
+├── start_mcp_server.sh    # Script de démarrage
+├── requirements.txt       # Dépendances Python
+├── .gitignore            # Fichiers exclus
+└── README.md             # Documentation
 ```
 
-## Utilisation
+## ⚙️ Configuration
 
-### Mode simple (un seul PDF)
-
-```python
-from gots_crawler import GOTSCrawler, create_excel_output
-from pathlib import Path
-
-crawler = GOTSCrawler(headless=False)
-result = crawler.process_pdf(Path("path/to/certification.pdf"))
-create_excel_output([result], "results.xlsx")
-crawler.close()
-```
-
-### Mode batch (fichier Excel + PDFs)
+Variables d'environnement disponibles :
 
 ```bash
-python main.py
+export PORT=8000           # Port du serveur MCP
+export HOST=0.0.0.0       # Host du serveur
 ```
 
-Le script `main.py` va :
-1. Lire le fichier Excel des suppliers (`../Original files/UC4_Suppliers datasets.xlsx`)
-2. Pour chaque supplier, chercher et traiter le PDF de certification correspondant
-3. Générer un fichier Excel `verification_results.xlsx` avec les résultats
+## 🛠️ Optimisations techniques
 
-## Format du fichier Excel de sortie
+- **Chargement eager** : Ne pas attendre le chargement complet des pages
+- **Images désactivées** : Réduction du temps de chargement
+- **Timeouts réduits** : 8s max pour les éléments critiques
+- **JavaScript injection** : Pour les clics et la suppression des popups cookies
+- **Multi-stratégie** : Plusieurs méthodes de fallback pour l'extraction de données
 
-Le fichier Excel généré contient les colonnes suivantes :
+## 🔍 Gestion des cas limites
 
-- **Company name** : Nom de la compagnie
-- **Certification Number** : Numéro de certification
-- **Found?** : Oui/Non selon si la certification a été trouvée
-- **Country** : Pays
-- **Field of operation** : Domaine d'opération
-- **Product category** : Catégorie de produits
-- **CB Client number** : Numéro client CB
-- **Certification Body** : Organisme de certification
-- **Certificate Expiry Date** : Date d'expiration
-- **Address** : Adresse
-- **Product details** : Détails des produits certifiés
+- **Plusieurs résultats** : Sélection du premier résultat par défaut si aucun match exact
+- **Popups cookies** : Masquage automatique via JavaScript
+- **Données manquantes** : Champs vides si non trouvés
+- **Timeouts** : Gestion des erreurs avec messages explicites
 
-## Notes importantes
+## 💡 Tips
 
-- Le crawler utilise Selenium pour interagir avec le site web GOTS
-- Des pauses sont ajoutées entre les requêtes pour ne pas surcharger le serveur
-- Si une certification n'est pas trouvée, les colonnes suivantes restent vides
-- Le mode `headless=False` permet de voir le navigateur (utile pour le débogage)
-
-## Dépannage
-
-### ChromeDriver non trouvé
-Installer ChromeDriver ou utiliser `webdriver-manager` :
-```python
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-
-service = Service(ChromeDriverManager().install())
-driver = webdriver.Chrome(service=service, options=chrome_options)
-```
-
-### Aucun résultat trouvé
-- Vérifier que le numéro de certification est correctement extrait du PDF
-- Essayer de rechercher manuellement sur le site pour vérifier
-- Le site peut avoir changé sa structure HTML
-
-## Auteur
-
-Créé pour le hackathon GOTS
-
+- Utiliser `headless=False` pour déboguer visuellement
+- Le crawler log toutes les étapes importantes
+- Les logs externes (Selenium, WDM) sont réduits au niveau WARNING
